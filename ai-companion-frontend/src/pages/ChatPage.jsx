@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useAuth0 } from '@auth0/auth0-react'
 import { Mic, LogOut } from 'lucide-react'
-import '../styles/ChatPage.css'
+import '../styles/Chatpage.css'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
