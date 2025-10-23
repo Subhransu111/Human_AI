@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+assemblyai
+groq
+elevenlabs
+sqlalchemy
+pydantic
+python-multipart
+requests
+nltk
+python-jose[cryptography]
