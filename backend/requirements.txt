@@ -10,3 +10,4 @@ python-multipart
 requests
 nltk
 python-jose[cryptography]
+psycopg2-binary
