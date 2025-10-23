@@ -1,10 +1,10 @@
 from nltk.sentiment import SentimentIntensityAnalyzer
 import nltk
+import os
 
-try:
-    nltk.data.find('vader_lexicon')
-except LookupError:
-    nltk.download('vader_lexicon')
+script_dir = os.path.dirname(os.path.abspath(__file__))
+data_dir = os.path.join(script_dir, '..', 'nltk_data')
+nltk.data.path.append(data_dir)
 
 sia = SentimentIntensityAnalyzer()
 
