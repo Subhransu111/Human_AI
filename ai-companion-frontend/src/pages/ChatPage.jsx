@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth0 } from '@auth0/auth0-react';
 import { Mic, LogOut, Square } from 'lucide-react'; // Added Square icon
 import * as vad from "@ricky0123/vad-web"; // VAD library
-import './ChatPage.css'; // Assuming your CSS path is correct now
+import './Chatpage.css'; 
 
 const API_URL = import.meta.env.VITE_API_URL; // Should be set in Vercel
 
