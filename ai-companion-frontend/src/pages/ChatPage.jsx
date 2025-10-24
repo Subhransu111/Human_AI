@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth0 } from '@auth0/auth0-react';
-import { Mic, LogOut, Square } from 'lucide-react';
-import * as vad from "@ricky0123/vad-web";
-// Corrected import path based on your confirmation
+import { Mic, LogOut } from 'lucide-react'; // Removed Square
+// Corrected import path
 import '../styles/Chatpage.css';
 
 // Ensure this is correctly set in your Vercel frontend project's environment variables
@@ -10,168 +9,123 @@ const API_URL = import.meta.env.VITE_API_URL;
 
 export default function ChatPage() {
     // --- State and Refs ---
-    const { user, logout, getAccessTokenSilently, isLoading, isAuthenticated } = useAuth0(); // Added isLoading, isAuthenticated
+    const { user, logout, getAccessTokenSilently, isLoading, isAuthenticated } = useAuth0();
     const [messages, setMessages] = useState([]);
     const [emotion, setEmotion] = useState('neutral');
-    const [isConversationActive, setIsConversationActive] = useState(false);
-    const [isListeningForSpeech, setIsListeningForSpeech] = useState(false);
-    const [isProcessing, setIsProcessing] = useState(false);
-    const vadRef = useRef(null);
-    const streamRef = useRef(null);
-    const audioContextRef = useRef(null);
-    const silenceTimerRef = useRef(null);
+    const [recording, setRecording] = useState(false); // Back to manual recording state
+    const [isProcessing, setIsProcessing] = useState(false); // Keep track of backend processing
+    const mediaRecorderRef = useRef(null);
+    const audioChunksRef = useRef([]);
     const messagesEndRef = useRef(null); // Ref for scrolling
 
-    // --- VAD Logic ---
-    const startVad = useCallback(async () => {
-        if (vadRef.current || isProcessing) {
-            console.log("VAD start skipped: Already running or processing.");
-            return;
-        }
-        console.log("Attempting to start VAD...");
-        setIsListeningForSpeech(true);
+    // --- Original Recording Logic ---
+    const startRecording = async () => {
+        if (recording || isProcessing) return; // Prevent starting if already recording or processing
+        console.log("Start Recording clicked");
+        setIsProcessing(true); // Indicate activity starts
         try {
-            if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
-                audioContextRef.current = new AudioContext();
-                await audioContextRef.current.resume();
-            }
-            if (!streamRef.current || streamRef.current.getAudioTracks().every(t => t.readyState === 'ended')) {
-                streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
-            }
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            // You might need to specify a MIME type supported by AssemblyAI if 'audio/wav' isn't default
+            // Common options: 'audio/webm', 'audio/ogg'
+            const options = { mimeType: 'audio/webm;codecs=opus' }; // Example using webm/opus
+             try {
+                 mediaRecorderRef.current = new MediaRecorder(stream, options);
+             } catch (e) {
+                 console.warn("Specified mimeType not supported, trying default:", e);
+                 mediaRecorderRef.current = new MediaRecorder(stream); // Fallback to browser default
+             }
 
-            const newVad = await vad.MicVAD.new({
-                audioContext: audioContextRef.current,
-                stream: streamRef.current,
-                onSpeechStart: () => {
-                    console.log("VAD: Speech Start");
-                    setIsListeningForSpeech(true);
-                    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-                },
-                onSpeechEnd: (audio) => {
-                    console.log("VAD: Speech End");
-                    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-                    setIsListeningForSpeech(false);
-                    setIsProcessing(true);
+            audioChunksRef.current = [];
 
-                    const audioBlob = createBlobFromFloat32Array(audio, audioContextRef.current.sampleRate);
-                    if (audioBlob.size > 1000) {
-                        console.log("VAD: Sending audio blob:", audioBlob.size, "bytes");
-                        sendAudio(audioBlob);
-                    } else {
-                        console.log("VAD: Detected silence/short audio, not sending.");
-                        setIsProcessing(false);
-                        if (isConversationActive) {
-                            console.log("VAD: Restarting listening after short audio.");
-                            setTimeout(startVad, 100);
-                        }
-                    }
-                },
-                positiveSpeechThreshold: 0.6,
-                negativeSpeechThreshold: 0.45,
-                minSilenceFrames: 5, // Adjust based on how quickly you want it to detect end of speech
-                redemptionFrames: 3,
-                assetPath: '/assets/vad-models'
-            });
-            vadRef.current = newVad;
-            newVad.start();
-            console.log("VAD started successfully.");
+            mediaRecorderRef.current.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    audioChunksRef.current.push(event.data);
+                }
+            };
+
+            mediaRecorderRef.current.onstop = () => {
+                console.log("Recording stopped, processing chunks.");
+                // Use the determined mimeType or a fallback
+                const mimeType = mediaRecorderRef.current?.mimeType || 'audio/webm';
+                const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+                console.log("Audio Blob created:", audioBlob.size, "bytes, type:", audioBlob.type);
+                if (audioBlob.size > 1000) { // Send only if meaningful audio
+                    sendAudio(audioBlob); // sendAudio will set isProcessing to false in finally
+                } else {
+                     console.log("Audio blob too small, likely silence. Not sending.");
+                     setIsProcessing(false); // Reset processing if not sending
+                     setRecording(false); // Also reset recording state
+                }
+                // Clean up stream tracks
+                stream.getTracks().forEach(track => track.stop());
+            };
+
+            mediaRecorderRef.current.start();
+            setRecording(true);
+            setIsProcessing(false); // Recording started, no longer in the initial "processing" phase
+            console.log("Recording started");
+
         } catch (error) {
-            console.error('Error starting VAD:', error);
-            alert(`Could not start microphone or VAD: ${error.message}`);
-            stopConversation();
-        }
-    }, [isProcessing, isConversationActive]);
-
-    const stopVad = useCallback(() => {
-        console.log("Attempting to stop VAD...");
-        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-        silenceTimerRef.current = null;
-        if (vadRef.current) {
-            vadRef.current.destroy();
-            vadRef.current = null;
-            console.log("VAD destroyed.");
-        }
-        if (streamRef.current) {
-            streamRef.current.getTracks().forEach(track => track.stop());
-            streamRef.current = null;
-            console.log("Mic stream stopped.");
-        }
-        if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-            audioContextRef.current.close().then(() => console.log("AudioContext closed."));
-            audioContextRef.current = null;
-        }
-    }, []);
-
-    // --- Conversation Control ---
-    const startConversation = () => {
-        console.log("Start Conversation button clicked.");
-        if (!isConversationActive) {
-            setIsConversationActive(true);
+            console.error('Error starting recording:', error);
+            alert(`Could not start microphone: ${error.message}`);
+            setIsProcessing(false); // Reset processing on error
         }
     };
 
-    const stopConversation = () => {
-        console.log("Stop Conversation button clicked.");
-        setIsConversationActive(false);
-        setIsProcessing(false);
+    const stopRecording = () => {
+        console.log("Stop Recording clicked");
+        if (mediaRecorderRef.current && recording) {
+            mediaRecorderRef.current.stop(); // This will trigger the onstop handler
+            setRecording(false);
+            // Don't set isProcessing false here, onstop->sendAudio handles it
+        } else {
+             console.log("Stop clicked but not recording or recorder not ready.");
+        }
     };
 
     // --- API Calls & Audio Playback ---
     const loadHistory = useCallback(async () => {
-        // Guard against running if API_URL isn't set
-        if (!API_URL) {
-            console.error("VITE_API_URL is not defined. Cannot load history.");
-            setMessages([{ type: 'assistant', text: 'Configuration error: API URL not set.', timestamp: new Date() }]);
-            return;
-        }
-        console.log("Loading history from:", API_URL);
+        if (!API_URL) { console.error("API_URL missing"); return; }
+        console.log("Loading history...");
         try {
             const token = await getAccessTokenSilently({
                 authorizationParams: {
                     audience: import.meta.env.VITE_AUTH0_AUDIENCE,
-                    scope: 'read:current_user',
+                    scope: 'read:current_user openid profile email', // Ensure all needed scopes are here or in main.jsx
                 }
             });
             const response = await fetch(`${API_URL}/api/history`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
-            if (!response.ok) {
-                 const errorText = await response.text();
-                throw new Error(`History fetch failed: ${response.status} - ${errorText}`);
-            }
+            if (!response.ok) { throw new Error(`History fetch failed: ${response.status}`); }
             const data = await response.json();
-            console.log("History loaded:", data.messages?.length || 0, "messages");
+            console.log("History loaded:", data.messages?.length || 0);
             setMessages(data.messages || []);
         } catch (error) {
             console.error('Error loading history:', error);
-             setMessages([{ type: 'assistant', text: `Failed to load history: ${error.message}`, timestamp: new Date() }]);
+            setMessages([{ type: 'assistant', text: `Failed to load history: ${error.message}`, timestamp: new Date() }]);
         }
-    }, [getAccessTokenSilently]);
+    }, [getAccessTokenSilently]); // Keep dependency
 
     const sendAudio = async (audioBlob) => {
-        // Guard against running if API_URL isn't set
-        if (!API_URL) {
-            console.error("VITE_API_URL is not defined. Cannot send audio.");
-             setMessages(prev => [...prev, { type: 'assistant', text: 'Configuration error: API URL not set.', timestamp: new Date() }]);
-             setIsProcessing(false); // Reset state
-             // Attempt to restart VAD if conversation is active
-             if (isConversationActive) setTimeout(startVad, 300);
-            return;
-        }
-        console.log("Sending audio to:", API_URL);
-        stopVad(); // Ensure VAD stops before sending
-        setIsProcessing(true);
-        setIsListeningForSpeech(false);
+        if (!API_URL) { console.error("API_URL missing"); return; }
+        console.log("Sending audio...");
+        setIsProcessing(true); // Set processing true while sending/receiving
+        setRecording(false); // Ensure recording state is false
+
         try {
             console.log("1. Getting token for sendAudio...");
             const token = await getAccessTokenSilently({
                 authorizationParams: {
                     audience: import.meta.env.VITE_AUTH0_AUDIENCE,
-                    scope: 'openid profile email' // Ensure backend allows this scope for this endpoint if needed
+                    scope: 'openid profile email' // Scopes needed for this specific endpoint
                 }
             });
             const formData = new FormData();
-            formData.append('audio', audioBlob, 'speech.wav');
+            // Send with a filename and the correct type
+            const filename = `recording.${audioBlob.type.split('/')[1] || 'webm'}`;
+            formData.append('audio', audioBlob, filename);
+
             console.log("2. Sending audio POST to backend...");
             const response = await fetch(`${API_URL}/api/process-audio`, {
                 method: 'POST',
@@ -179,12 +133,11 @@ export default function ChatPage() {
                 body: formData
             });
             console.log("3. Backend response status:", response.status);
-            if (!response.ok) {
-                const errorText = await response.text();
-                console.error("Backend error response:", errorText);
+            if (!response.ok) { /* ... (error handling from previous code) ... */
+                 const errorText = await response.text(); console.error("Backend error response:", errorText);
                  try { const errorData = JSON.parse(errorText); throw new Error(errorData.detail || `Backend error: ${response.status}`); }
                  catch(e) { throw new Error(`Backend error: ${response.status} - ${errorText}`); }
-            }
+             }
             const data = await response.json();
             console.log("4. Backend response data:", data);
             setMessages(prev => [
@@ -205,13 +158,8 @@ export default function ChatPage() {
             setMessages(prev => [...prev, { type: 'assistant', text: `Sorry, an error occurred: ${error.message}`, timestamp: new Date() }]);
         } finally {
             console.log("7. SendAudio finished. Resetting processing state.");
-            setIsProcessing(false);
-            if (isConversationActive) {
-                console.log("8. Conversation active, restarting VAD listening...");
-                setTimeout(startVad, 300);
-            } else {
-                console.log("8. Conversation stopped, VAD remains off.");
-            }
+            setIsProcessing(false); // Reset processing state here
+             setRecording(false); // Ensure recording state is false
         }
     };
 
@@ -228,68 +176,44 @@ export default function ChatPage() {
         });
     };
 
-    // --- Helper Function: Float32Array to WAV Blob ---
-    function createBlobFromFloat32Array(audioData, sampleRate) {
-        // ... (createBlobFromFloat32Array function remains the same)
-        const bytesPerSample=2; const numChannels=1; const numSamples=audioData.length; const buffer=new ArrayBuffer(44+numSamples*bytesPerSample); const view=new DataView(buffer); writeString(view,0,'RIFF'); view.setUint32(4,36+numSamples*bytesPerSample,true); writeString(view,8,'WAVE'); writeString(view,12,'fmt '); view.setUint32(16,16,true); view.setUint16(20,1,true); view.setUint16(22,numChannels,true); view.setUint32(24,sampleRate,true); view.setUint32(28,sampleRate*numChannels*bytesPerSample,true); view.setUint16(32,numChannels*bytesPerSample,true); view.setUint16(34,bytesPerSample*8,true); writeString(view,36,'data'); view.setUint32(40,numSamples*bytesPerSample,true); let offset=44; for(let i=0;i<numSamples;i++,offset+=bytesPerSample){const sample=Math.max(-1,Math.min(1,audioData[i])); view.setInt16(offset,sample<0?sample*0x8000:sample*0x7FFF,true);} return new Blob([view],{type:'audio/wav'});
-    }
-
-    function writeString(view, offset, string) {
-        // ... (writeString function remains the same)
-         for(let i=0;i<string.length;i++){view.setUint8(offset+i,string.charCodeAt(i));}
-    }
+    // --- Helper Functions (Not needed for VAD, keep if used elsewhere) ---
+    // Remove createBlobFromFloat32Array and writeString if ONLY used for VAD
 
     // --- Logout ---
     const handleLogout = () => {
-        // ... (handleLogout function remains the same)
-        stopConversation(); logout({ logoutParams: { returnTo: window.location.origin } });
+        // Stop recording if active before logging out
+        if (mediaRecorderRef.current && recording) {
+             mediaRecorderRef.current.stop();
+        }
+        setRecording(false);
+        setIsProcessing(false);
+        logout({ logoutParams: { returnTo: window.location.origin } });
     };
 
     // --- Effects ---
     useEffect(() => {
-        // Effect to manage VAD lifecycle
-        if (isConversationActive) {
-            if (!isProcessing) {
-                startVad();
-            } else {
-                 console.log("useEffect: VAD start skipped, currently processing.");
-            }
-        } else {
-            stopVad(); // Cleanup when conversation stops
-        }
-        // Cleanup function for when the component unmounts OR dependencies change causing stop
-        return () => {
-             console.log("useEffect [VAD Lifecycle]: Cleanup.");
-            stopVad();
-        };
-    }, [isConversationActive, isProcessing, startVad, stopVad]); // Dependencies
-
-    // **** THIS IS THE FIX for "Login required" error ****
-    useEffect(() => {
-        // Effect specifically for loading history AFTER authentication is confirmed
+        // Load history only when authenticated and not loading
         if (!isLoading && isAuthenticated) {
             console.log("Auth is ready and authenticated, loading history...");
             loadHistory();
         } else if (!isLoading && !isAuthenticated) {
-            console.log("Auth is ready but user is not authenticated, skipping history load.");
-             setMessages([]); // Clear messages if user logs out
+            console.log("Auth is ready but user not authenticated, skipping history load.");
+            setMessages([]);
         } else {
              console.log("Auth is still loading...");
         }
-    }, [isLoading, isAuthenticated, loadHistory]); // Dependencies: run when auth state changes
+    }, [isLoading, isAuthenticated, loadHistory]); // Correct dependencies
 
-
-    // Effect for scrolling messages
     useEffect(() => {
+        // Scroll to bottom when messages change
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }, [messages]); // Scroll when messages array changes
-
+    }, [messages]);
 
     // --- Render ---
     return (
         <div className="chat-container">
             <div className="chat-header">
-                <div className="header-left">
+                 <div className="header-left">
                     <div className="user-avatar">
                         {user?.picture ? ( <img src={user.picture} alt={user.name} /> ) : ( user?.name?.[0] || 'U' )}
                     </div>
@@ -315,31 +239,23 @@ export default function ChatPage() {
                             </div>
                         </div>
                     ))}
-                    {/* Element to scroll to */}
-                    <div ref={messagesEndRef} />
+                    <div ref={messagesEndRef} /> {/* Scroll target */}
                 </div>
             </div>
 
             <div className="chat-footer">
-                {isConversationActive && isListeningForSpeech && !isProcessing && (
-                    <div className="voice-visualizer">
-                        {[1, 2, 3, 4, 5].map(i => <div key={i} className="bar" style={{ '--delay': `${i * 0.1}s` }} />)}
-                    </div>
-                )}
+                {/* Remove VAD visualizer */}
                 <p className="recording-text">
-                    {isConversationActive
-                        ? (isProcessing ? 'Processing...' : (isListeningForSpeech ? 'Listening...' : 'Waiting for speech...'))
-                        : 'Click Start to talk'}
+                    {isProcessing ? 'Processing...' : (recording ? 'Recording... Speak naturally' : 'Click Start to talk')}
                 </p>
                 <button
-                    onClick={isConversationActive ? stopConversation : startConversation}
-                    className={`record-btn ${isConversationActive ? (isProcessing ? 'processing' : 'recording') : ''}`}
-                    // Disable button if Auth0 is loading OR if processing during active convo
-                    disabled={isLoading || (isProcessing && isConversationActive)}
-                    title={isConversationActive ? 'Stop Conversation' : 'Start Conversation'}
+                    onClick={recording ? stopRecording : startRecording}
+                    className={`record-btn ${recording ? 'recording' : ''}`}
+                    disabled={isLoading || isProcessing} // Disable if Auth0 loading or backend processing
+                    title={recording ? 'Stop Recording' : 'Start Recording'}
                 >
-                    {isConversationActive ? <Square size={20} /> : <Mic size={20} />}
-                    {isConversationActive ? 'Stop' : 'Start'}
+                    <Mic size={20} /> {/* Always show Mic icon */}
+                    {recording ? 'Stop' : 'Start'}
                 </button>
             </div>
         </div>
