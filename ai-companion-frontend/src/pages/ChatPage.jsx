@@ -70,6 +70,7 @@ export default function ChatPage() {
                 negativeSpeechThreshold: 0.45,
                 minSilenceFrames: 5, // Adjust based on how quickly you want it to detect end of speech
                 redemptionFrames: 3,
+                assetPath: '/vad-models'
             });
             vadRef.current = newVad;
             newVad.start();
