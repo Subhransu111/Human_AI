@@ -4,19 +4,6 @@
       "source": "/(.*)",
       "destination": "/index.html"
     }
-  ],
-  "headers": [
-    {
-      "source": "/vad-models/(.+\\.mjs)",
-      "headers": [
-        { "key": "Content-Type", "value": "application/javascript" }
-      ]
-    },
-    {
-      "source": "/vad-models/(.+\\.wasm)",
-      "headers": [
-        { "key": "Content-Type", "value": "application/wasm" }
-      ]
-    }
   ]
+  
 }
