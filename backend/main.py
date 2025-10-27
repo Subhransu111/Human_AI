@@ -184,6 +184,7 @@ def get_current_user(
             db.add(user); db.commit(); db.refresh(user)
         except Exception as e:
             db.rollback()
+            print(f"!!! get_current_user: Error creating user in DB: {e}") # Keep important error logs
             raise HTTPException(status_code=500, detail="Could not create user profile.")
     return user
 
@@ -203,18 +204,16 @@ app.add_middleware(
 services_available = False
 try:
     from services.audio_service import process_audio
-    # *** IMPORTANT: Make sure this uses the correct function name from your emotion_service.py ***
-    # If you updated it to get_voice_for_emotion_and_language, import that name instead.
-    from services.emotion_service import analyze_emotion, get_voice_for_emotion_and_language # Corrected name
-    from services.llm_service import generate_response # Ensure this accepts language
-    from services.tts_service import text_to_speech # Ensure this uses Murf AI
+    from services.emotion_service import analyze_emotion, get_voice_for_emotion_and_language
+    from services.llm_service import generate_response
+    from services.tts_service import text_to_speech
     services_available = True
 except ImportError as e:
     print(f"!!! WARNING: Failed to import AI services: {e}.")
-    async def process_audio(data): return None, None # Needs to return tuple if using lang detect
+    async def process_audio(data): return None, None
     def analyze_emotion(text): return {'emotion': 'neutral', 'score': 0.0}
-    def get_voice_for_emotion_and_language(emo, lang, txt): return None # Corrected name
-    async def generate_response(txt, lang, ctx): return "Service unavailable." # Needs lang
+    def get_voice_for_emotion_and_language(emo, lang, txt): return None
+    async def generate_response(txt, lang, ctx): return "Service unavailable."
     async def text_to_speech(txt, vid): return None
 except Exception as e:
     print(f"!!! WARNING: Error initializing AI services during import: {e}")
@@ -261,7 +260,7 @@ async def process_audio_route(
          raise HTTPException(status_code=500, detail="History unavailable")
 
     transcription = None
-    detected_language = 'en' # Default language
+    detected_language = 'en'
     response_text = None
     emotion_data = {}
     voice_id = None
@@ -272,10 +271,10 @@ async def process_audio_route(
         if len(audio_data) == 0:
              raise HTTPException(status_code=400, detail="Received empty audio file.")
 
-        transcription, detected_language = await process_audio(audio_data) # Expect tuple
+        transcription, detected_language = await process_audio(audio_data)
         if not transcription:
             raise HTTPException(status_code=400, detail="Could not transcribe audio")
-        detected_language = detected_language or 'en' # Ensure default if detection fails
+        detected_language = detected_language or 'en'
 
         emotion_data = analyze_emotion(transcription)
 
@@ -283,10 +282,10 @@ async def process_audio_route(
         history_for_llm = [{"role": "user", "content": conv.user_message, "emotion": conv.emotion} for conv in reversed(user_history_db)]
         context = {"current_emotion": emotion_data.get('emotion', 'neutral'), "current_emotion_score": emotion_data.get('score', 0.0), "history": history_for_llm}
 
-        response_text = await generate_response(transcription, detected_language, context) # Pass language
+        response_text = await generate_response(transcription, detected_language, context)
         if not response_text: raise HTTPException(status_code=500, detail="AI failed to generate a response.")
 
-        voice_id = get_voice_for_emotion_and_language(emotion_data.get('emotion', 'neutral'), detected_language, response_text) # Pass language
+        voice_id = get_voice_for_emotion_and_language(emotion_data.get('emotion', 'neutral'), detected_language, response_text)
         if voice_id:
             audio_base64 = await text_to_speech(response_text, voice_id)
             if not audio_base64: print("!!! TTS failed, returning response without audio.")
