@@ -22,7 +22,7 @@ async def text_to_speech(text: str, voice_id: Optional[str]) -> Optional[str]:
         return None
 
     headers = {
-        "Authorization": f"Bearer {MURF_API_KEY}",
+        "api-key": MURF_API_KEY,
         "Content-Type": "application/json",
     }
     
